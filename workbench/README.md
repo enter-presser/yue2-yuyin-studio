@@ -14,9 +14,24 @@ bash /root/YuE/workbench/control.sh status
 curl http://127.0.0.1:6006/api/health
 ```
 
+轻量镜像不捆绑权重：首次打开侧栏 **音乐模型**，点击 **下载音乐模型**，校验通过后即可生成。写词和配置助手不必等待下载。
+
 首次打开“创作助手设置”，填写自己的 OpenAI-compatible Base URL、模型名称和 API Key，再测试连接。没有 API 时仍可手动填写歌词和风格生成音乐。API 服务的费用由所选服务商决定。
 
 密钥在服务器加密保存，不在网页明文回显，不默认放入 localStorage；支持删除配置。不要将作品数据库、加密密钥或访问凭据提交到 GitHub。
+
+## 首次下载音乐模型
+
+- 固定版本：YuE2-3B `1a96eca688d6ae5d7f0feb88573fec89920fcd19`、YuE2-Vae `95535e72a97bc0f09b8ada125d26b4009428c0e8`，合计 7,794,623,684 字节，约 7.79 GB。
+- 默认 HF-Mirror，另可选择 Hugging Face 官方。当前北京云实例实测官方连接失败、镜像站可用；网络条件可能变化。
+- 显示实际写入的下载字节；区分本地检查、下载、完整性校验、暂停、失败和就绪。没有虚构剩余时间。
+- 关闭弹窗、刷新页面不取消任务；暂停或服务重启后可以继续下载。重复点击不会启动第二个下载器。
+- 校验采用官方固定版本的 SHA-256 / Git blob SHA-1，损坏文件不会进入可生成状态。下载不使用用户的创作 API Key，也不占用 GPU。
+- 模型可放在 `STUDIO_MODEL_CACHE` 指定的位置；默认 `/root/autodl-tmp/huggingface/hub`。实际需要约 7.8 GB，加至少 1 GiB 余量。若云平台独立挂载数据盘，建议放在数据盘；本实例的 autodl-tmp 位于系统盘。
+- 只有点击下载才访问模型站点，只有点击生成才执行 GPU 推理。已有匹配缓存直接复用。
+- 没有模型时 `doctor --offline` 会报告权重缺失，这是预期状态；可用 `python -m yue2.cli --help` 和工作台测试验证软件环境。
+
+此次更新在云实例通过 26 项回归测试；真实下载并校验了配置与分词文件（约 2.56 MB），通过页面下载补回缺失文件，验证了两个大权重的 HTTP 206 分段接口；原有完整权重均通过校验。没有为测试重复下载全部 7.79 GB 权重。
 
 ## 创作流程
 
@@ -46,14 +61,14 @@ cd /root/YuE
 .venv/bin/python -m yue2.cli --help
 .venv/bin/python -m yue2.cli doctor --offline
 cd workbench
-../.venv/bin/python -m unittest test_harness -v
+../.venv/bin/python -m unittest test_harness test_models -v
 ```
 
 `doctor` 的 `dependencies_ready: true` 表示依赖就绪；其 `validated: false` 不表示完成了音质或最低显存验收。基础检查不会下载模型或触发音乐生成。
 
-已部署环境：Python 3.10、yue2-infer 0.1.6、PyTorch 2.10.0+cu130、Transformers 4.57.6；实测 GPU 为 RTX 4080 SUPER，驱动报告显存 32760 MiB。基础镜像标注的 CUDA 11.8 与实际 PyTorch 自带的 CUDA 13.0 运行时是不同信息。
+已部署环境：Python 3.10、yue2-infer 0.1.6、PyTorch 2.10.0+cu130、Transformers 4.57.6；初次实测 GPU 为 RTX 4080 SUPER；2026-09-12 再次开机后分配为 RTX 5090、32607 MiB。GPU 由实例分配，镜像不绑定某张显卡。基础镜像标注的 CUDA 11.8 与实际 PyTorch 自带的 CUDA 13.0 运行时是不同信息。
 
-工作台验证基线为官方提交 `92a73cc7652fcc1f937855e4b765e0a0edd7ff2e`。此 GitHub 派生仓库创建时继承更新的官方 main；不要把仓库最新 HEAD 当作已在该镜像完整回归过的版本。已验证真实创作 API、full 模式歌曲生成、两版试听下载、刷新恢复、方案复用和取消；部署版本的 16 项回归检查通过。新克隆环境需重新验证。
+工作台验证基线为官方提交 `92a73cc7652fcc1f937855e4b765e0a0edd7ff2e`。此 GitHub 派生仓库创建时继承更新的官方 main；不要把仓库最新 HEAD 当作已在该镜像完整回归过的版本。已验证真实创作 API、full 模式歌曲生成、两版试听下载、刷新恢复、方案复用和取消；最初部署的 16 项回归检查通过；模型下载更新后为 26 项。新克隆环境需重新验证。
 
 ## 从源码安装
 
@@ -68,7 +83,7 @@ chmod +x workbench/*.sh
 bash workbench/control.sh start
 ```
 
-`run.sh` 默认使用 `/root/autodl-tmp/huggingface` 缓存并启用离线模式。余音镜像已准备权重；新环境需依据官方指南自行准备匹配的 YuE2-3B 与 YuE2-Vae 权重，再开启服务。本仓库不包含权重或 API 凭据，也不会由开机脚本自动申请付费资源。
+`run.sh` 默认使用 `/root/autodl-tmp/huggingface` 缓存并启用离线模式。无模型时面板仍正常启动，通过“音乐模型”下载固定版本权重；下载器独立于推理离线模式。旧版含权重镜像也可升级，自动复用已有缓存。本仓库不包含权重或 API 凭据，也不会由开机脚本自动申请付费资源。
 
 ## 代码和数据
 
@@ -78,6 +93,7 @@ bash workbench/control.sh start
 | `server.py` | HTTP API、项目与版本、访问校验 |
 | `assistant.py` | OpenAI-compatible 适配与受约束创作工具 |
 | `domain.py` | 输入 schema、歌词、参数、ABC 校验 |
+| `models.py`、`model-catalog.json` | 固定版本、可续传下载、校验与模型就绪状态 |
 | `worker.py` | 单卡队列、四阶段推理、取消与阶段产物 |
 | `store.py` | SQLite、加密凭据、输入与任务追踪 |
 | `test_harness.py` | 隔离的回归和故障测试，不作为音乐生成演示 |

@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from domain import Song, Save, Generate, Message, Revision, Rename, Provider, Login, Strict, Field, validate_song, fingerprint, sections
 from store import db, init, uid, now, dump, cipher, check_password, event, artifact_dir, add_user
 import worker
+import models
 import assistant
 
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
@@ -37,9 +38,11 @@ async def lifespan(app):
         with db() as c:
             owner=c.execute("SELECT id FROM users WHERE name=?",(PRIVATE_USER,)).fetchone()
         if not owner: add_user(PRIVATE_USER,secrets.token_urlsafe(48))
+    models.manager.launch()
     worker.start()
     yield
     worker.stopping.set()
+    models.manager.cancel()
 
 app=FastAPI(title='余音 · YuE2 创作工作台',lifespan=lifespan,docs_url=None,redoc_url=None)
 
@@ -139,7 +142,31 @@ def view_version(v):
     return v
 
 @app.get('/api/health')
-def health(): return {'status':'ok','engine':'YuE2','worker':worker.health,'queue_concurrency':1}
+def health(): return {'status':'ok','engine':'YuE2','worker':worker.health,'queue_concurrency':1,'models':models.manager.snapshot()}
+
+@app.get('/api/models')
+def model_status(u=Depends(user)):
+    return models.manager.snapshot()
+
+class DownloadModels(Strict):
+    source: str = Field(default='official', pattern='^(official|mirror)$')
+
+@app.post('/api/models/download')
+def download_models(body:DownloadModels,u=Depends(user)):
+    try: return models.manager.launch(download=True,source=body.source)
+    except models.ModelError as exc: fail(exc.code,exc.message,409)
+
+@app.post('/api/models/check')
+def check_models(u=Depends(user)):
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]: fail('engine_busy','请等待当前音乐任务完成后再检查模型。',409)
+        try: return models.manager.launch(force=True)
+        except models.ModelError as exc: fail(exc.code,exc.message,409)
+
+@app.post('/api/models/cancel')
+def cancel_model_download(u=Depends(user)):
+    return models.manager.cancel()
 
 @app.post('/api/login')
 def login(body:Login,request:Request):
@@ -310,6 +337,7 @@ def generate(pid:str,body:Generate,u=Depends(user)):
             source=own_version(c,body.reuse_version,u)
             if source['project']!=pid or source['fingerprint']!=fp: fail('reuse_mismatch','源音乐方案与当前输入不匹配，请重新规划。')
             if not (artifact_dir(source['id'])/'plan_manifest.json').is_file(): fail('no_plan','该版本还没有可复用的音乐方案。')
+        if not models.manager.ready(): fail('models_missing','音乐模型尚未准备好。请打开“音乐模型”，下载或检查模型后再生成；手稿已保留。',409)
         vid,jid=uid(),uid()
         number=c.execute('SELECT COUNT(*) FROM versions WHERE project=?',(pid,)).fetchone()[0]+1
         name=f"V{number} · {state['title']}"+(' · 音乐方案' if body.kind=='plan' else '')

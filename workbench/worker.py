@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from store import db, now, dump, transition, artifact_dir, DATA
 from domain import Song, fingerprint, validate_song
+from models import CACHE, manager
 
 log = logging.getLogger('studio.worker')
 MODEL = 'm-a-p/YuE2-3B'
@@ -145,11 +146,12 @@ def loop():
             signal.wait(1); signal.clear(); continue
         health['active_job']=job['id']
         try:
+            if not manager.ready(): raise FileNotFoundError('Models are not verified or have changed')
             if pipe is None:
                 health.update(state='loading',detail='正在校验本地权重并载入模型')
                 transition(job['id'],'loading',detail=health['detail'])
                 from yue2 import YuE2Pipeline
-                pipe=YuE2Pipeline.from_pretrained(MODEL,revision=MODEL_REV,vae=VAE,vae_revision=VAE_REV,device='cuda',cache_dir='/root/autodl-tmp/huggingface/hub',local_files_only=True,progress=False)
+                pipe=YuE2Pipeline.from_pretrained(MODEL,revision=MODEL_REV,vae=VAE,vae_revision=VAE_REV,device='cuda',cache_dir=str(CACHE),local_files_only=True,progress=False)
                 pipe._load_model()  # Installed 0.1.6 lazily loads. Explicitly finish loading before reporting planning.
                 health.update(state='ready',detail='YuE2 已加载 · 单卡串行生成')
             elif pipe._model is not None and next(pipe._model.parameters()).device != pipe.device:

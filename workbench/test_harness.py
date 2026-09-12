@@ -15,9 +15,23 @@ class HarnessTests(unittest.TestCase):
         store.init();store.add_user('alice','test-password-alice');store.add_user('bob','test-password-bob')
         cls.client=TestClient(server.app)
     def setUp(self):
+        self.model_ready=patch('server.models.manager.ready',return_value=True)
+        self.model_ready.start();self.addCleanup(self.model_ready.stop)
         self.c=TestClient(server.app);self.c.headers['X-Studio-Request']='1'
         self.c.post('/api/login',json={'username':'alice','password':'test-password-alice'})
         self.p=self.c.post('/api/projects',json={'lyrics':'[Verse]\n一起走过夏天','title':'test'}).json()
+    def test_model_gate_no_job_and_schema(self):
+        url='/api/projects/'+self.p['id']+'/generate'
+        with patch('server.models.manager.ready',return_value=False):
+            result=self.c.post(url,json={'revision':0,'idempotency_key':store.uid()})
+        self.assertEqual(result.status_code,409)
+        self.assertEqual(result.json()['error']['code'],'models_missing')
+        self.assertEqual(self.c.get('/api/projects/'+self.p['id']).json()['versions'],[])
+        self.assertEqual(self.c.post('/api/models/download',json={'source':'http://127.0.0.1'}).status_code,422)
+        self.assertEqual(self.c.post('/api/models/download',json={'source':'official','command':'anything'}).status_code,422)
+        anon=TestClient(server.app)
+        self.assertEqual(anon.get('/api/models').status_code,401)
+
     def test_auth_isolation(self):
         anon=TestClient(server.app);self.assertEqual(anon.get('/api/projects').status_code,401)
         bob=TestClient(server.app,headers={'X-Studio-Request':'1'});bob.post('/api/login',json={'username':'bob','password':'test-password-bob'})

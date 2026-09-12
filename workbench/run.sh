@@ -4,6 +4,7 @@ cd /root/YuE/workbench
 export PYTHONPATH="/root/YuE/workbench/vendor:${PYTHONPATH:-}"
 export HF_HOME=/root/autodl-tmp/huggingface
 export HF_HUB_OFFLINE=1
+export STUDIO_MODEL_CACHE="${STUDIO_MODEL_CACHE:-$HF_HOME/hub}"
 export STUDIO_DATA=/root/autodl-tmp/yue2-studio
 export OMP_NUM_THREADS=8
 export STUDIO_PRIVATE_USER=creator

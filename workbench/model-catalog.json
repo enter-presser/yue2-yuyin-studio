@@ -1,0 +1,128 @@
+[
+  {
+    "repo": "m-a-p/YuE2-3B",
+    "revision": "1a96eca688d6ae5d7f0feb88573fec89920fcd19",
+    "files": [
+      {
+        "name": "LICENSE",
+        "size": 20309,
+        "algorithm": "git-sha1",
+        "digest": "5b4b50fd3e4d4cadbc54c49cab3552d0eb303d48"
+      },
+      {
+        "name": "THIRD_PARTY_NOTICES.md",
+        "size": 793,
+        "algorithm": "git-sha1",
+        "digest": "8178461b1f6ec6f9977cf0e03b93abd39f5ba1af"
+      },
+      {
+        "name": "config.json",
+        "size": 959,
+        "algorithm": "git-sha1",
+        "digest": "9584e50ba9d6e487690544e14dd7555edbe27973"
+      },
+      {
+        "name": "generation_config.json",
+        "size": 204,
+        "algorithm": "git-sha1",
+        "digest": "041d89f512a1b79c13e1a3dee54b5a9bc7c26cad"
+      },
+      {
+        "name": "licenses/SnakeBeta-NVIDIA-MIT.txt",
+        "size": 1076,
+        "algorithm": "git-sha1",
+        "digest": "e9663595cc28938f88d6299acd3ba791542e4c0c"
+      },
+      {
+        "name": "licenses/stable-audio-tools-MIT.txt",
+        "size": 1069,
+        "algorithm": "git-sha1",
+        "digest": "f119f94cf2ec8269020dd0d8140a4c4b83cc65a1"
+      },
+      {
+        "name": "model.safetensors",
+        "size": 7261441640,
+        "algorithm": "sha256",
+        "digest": "1d55c42c1a9875c34f5d736e15078449992b044e807ce2a138e6cf289a1e59e9"
+      },
+      {
+        "name": "modeling_yue2.py",
+        "size": 32983,
+        "algorithm": "git-sha1",
+        "digest": "9e2b9924b6e277cab5905771ac9afc068267ee8b"
+      },
+      {
+        "name": "qwen.tiktoken",
+        "size": 2561218,
+        "algorithm": "git-sha1",
+        "digest": "9b9b0e0416d84d7c88333eb261c77e5fe2d7f7be"
+      },
+      {
+        "name": "weights_manifest.json",
+        "size": 179,
+        "algorithm": "git-sha1",
+        "digest": "5ac0adb948bf8d8987ce7a1401fc39d0842b709d"
+      },
+      {
+        "name": "yue2_generation_config.json",
+        "size": 466,
+        "algorithm": "git-sha1",
+        "digest": "f8214009f5bb5425319e4519b12e4853ad72acf3"
+      }
+    ]
+  },
+  {
+    "repo": "m-a-p/YuE2-Vae",
+    "revision": "95535e72a97bc0f09b8ada125d26b4009428c0e8",
+    "files": [
+      {
+        "name": "LICENSE",
+        "size": 20309,
+        "algorithm": "git-sha1",
+        "digest": "5b4b50fd3e4d4cadbc54c49cab3552d0eb303d48"
+      },
+      {
+        "name": "THIRD_PARTY_NOTICES.md",
+        "size": 793,
+        "algorithm": "git-sha1",
+        "digest": "8178461b1f6ec6f9977cf0e03b93abd39f5ba1af"
+      },
+      {
+        "name": "config.json",
+        "size": 1378,
+        "algorithm": "git-sha1",
+        "digest": "f68832bef1b99f53dd70460f6b0d336971a664b8"
+      },
+      {
+        "name": "licenses/SnakeBeta-NVIDIA-MIT.txt",
+        "size": 1076,
+        "algorithm": "git-sha1",
+        "digest": "e9663595cc28938f88d6299acd3ba791542e4c0c"
+      },
+      {
+        "name": "licenses/stable-audio-tools-MIT.txt",
+        "size": 1069,
+        "algorithm": "git-sha1",
+        "digest": "f119f94cf2ec8269020dd0d8140a4c4b83cc65a1"
+      },
+      {
+        "name": "model.safetensors",
+        "size": 530512720,
+        "algorithm": "sha256",
+        "digest": "807ce9d5149fa27c5ad3e6582058469852e908f6c5acc8c8aa338e7ab7751346"
+      },
+      {
+        "name": "modeling_vae.py",
+        "size": 25265,
+        "algorithm": "git-sha1",
+        "digest": "79014d26619982b3eaa9b9c987c31d6f931930b0"
+      },
+      {
+        "name": "weights_manifest.json",
+        "size": 178,
+        "algorithm": "git-sha1",
+        "digest": "c663bbfcc6238d5b35cd61bee56e6aab4c7e3876"
+      }
+    ]
+  }
+]
