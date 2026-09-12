@@ -1,0 +1,2 @@
+# Install into workbench/vendor, preserving the existing YuE2 environment.
+cryptography==46.0.5

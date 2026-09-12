@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+vendor/
+.env
+.env.*
+*.key
+*.sqlite*
+*.db
+*.log
+*.pid
+artifacts/
+diagnostics/
+data/
+.DS_Store
+._*
