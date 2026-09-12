@@ -1,3 +1,19 @@
+# 余音 · YuE2 AI 音乐创作工作台
+
+这是基于官方 YuE2 的非官方中文音乐创作工作台。用一句话整理创作方向，编辑歌词，生成歌曲，试听并继续修改版本。
+
+**[查看中文使用说明与启动方法 →](workbench/README.md)** · [工作台源码](workbench/)
+
+- 完整中文面板、AI 修改建议与确认、分阶段生成、播放器和歌曲版本管理。
+- 创作助手使用用户自行配置的 OpenAI-compatible API；音乐音频由本地 YuE2 生成。没有 API 也可手动创作。
+- 不包含 API Key、个人配置、私人作品或模型权重。模型安装方式见下方官方文档。
+- 工作台来自已部署版本；部署使用的 YuE 基线为 `92a73cc7652fcc1f937855e4b765e0a0edd7ff2e`。本 fork 的上游 main 更新，不代表所有新增上游变更都已完成 GPU 回归验证。
+- 本仓库保留官方源码、文档和许可证；与官方项目没有隶属关系。
+
+---
+
+## 上游 YuE 官方文档
+
 > Looking for the original YuE? Its code, documentation, and license are preserved on the **[YuE-v1 branch](https://github.com/multimodal-art-projection/YuE/tree/YuE-v1)**.
 
 <p align="center">
