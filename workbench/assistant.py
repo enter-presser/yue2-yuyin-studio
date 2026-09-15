@@ -1,4 +1,4 @@
-"""OpenAI-compatible adapter and bounded, validated tools. No GPU dispatch capability."""
+"""OpenAI / Anthropic adapters and bounded tools. No GPU dispatch capability."""
 import asyncio
 import ipaddress
 import json
@@ -8,6 +8,7 @@ import httpx
 from pydantic import Field
 from domain import Strict, Song, validate_song, compare, parse_abc
 from store import db, cipher, dump
+from llm_protocols import endpoint, request_body, normalize
 
 class ProviderError(Exception):
     def __init__(self,code,message): self.code,self.message=code,message
@@ -30,16 +31,19 @@ def get_provider(user):
 
 async def completion(provider,messages,tools=None):
     url=await valid_url(provider['base_url'])
-    payload={'model':provider['model'],'messages':messages,'max_tokens':6000}
-    if tools: payload.update(tools=tools,tool_choice='auto')
+    protocol=provider.get('protocol','openai')
+    if protocol not in ('openai','anthropic'): raise ProviderError('protocol','请选择 OpenAI 或 Anthropic 协议。')
+    payload=request_body(provider['model'],messages,tools,protocol)
+    key=cipher.decrypt(provider['secret'].encode()).decode()
+    headers={'x-api-key':key,'anthropic-version':'2023-06-01'} if protocol=='anthropic' else {'Authorization':'Bearer '+key}
     # Use the official GLM non-thinking mode for interactive lyric proposals.
     # Do not send vendor-specific options to other OpenAI-compatible APIs.
-    if urlsplit(url).hostname=='open.bigmodel.cn' and provider['model'].startswith(('glm-5','glm-4.7')):
+    if protocol=='openai' and urlsplit(url).hostname=='open.bigmodel.cn' and provider['model'].startswith(('glm-5','glm-4.7')):
         payload['thinking']={'type':'disabled'}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(135,connect=12),follow_redirects=False,trust_env=False) as client:
-            async with client.stream('POST',url+'/chat/completions',headers={'Authorization':'Bearer '+cipher.decrypt(provider['secret'].encode()).decode()},json=payload) as r:
-                codes={401:('authentication','API Key 认证失败，请重新填写。'),403:('authentication','服务商拒绝访问，请检查密钥权限。'),404:('model_or_address','地址或模型不存在，请检查 Base URL 的 /v1 路径和模型名。'),429:('rate_limit','服务商限流或额度不足，请稍后重试或检查额度。')}
+            async with client.stream('POST',endpoint(url,protocol),headers=headers,json=payload) as r:
+                codes={401:('authentication','API Key 认证失败，请重新填写。'),403:('authentication','服务商拒绝访问，请检查密钥权限。'),404:('model_or_address','地址或模型不存在，请检查接入协议、Base URL 和模型名。'),429:('rate_limit','服务商限流或额度不足，请稍后重试或检查额度。'),529:('overloaded','服务商暂时繁忙，请稍后重试。')}
                 if r.status_code in codes: raise ProviderError(*codes[r.status_code])
                 data=b''
                 async for chunk in r.aiter_bytes():
@@ -53,18 +57,13 @@ async def completion(provider,messages,tools=None):
                     except (ValueError,AttributeError): code,message='',''
                     if code=='1211' or ('model' in message and ('not exist' in message or 'not found' in message)):
                         raise ProviderError('model_unavailable','模型不存在或账号无权使用。请填写服务商的真实模型 ID，不要附加 [1m] 等客户端标记。')
-                    raise ProviderError('provider_error',f'服务商返回 HTTP {r.status_code}，请检查接口是否支持 Chat Completions 与工具调用。')
-        result=json.loads(data)['choices'][0]['message']
-        if not isinstance(result,dict): raise ValueError()
-        if result.get('tool_calls') is not None:
-            calls=result['tool_calls']
-            if not isinstance(calls,list) or any(not isinstance(c,dict) or not isinstance(c.get('id'),str) or not isinstance(c.get('function'),dict) or not isinstance(c['function'].get('name'),str) or not isinstance(c['function'].get('arguments'),str) for c in calls):
-                raise ValueError('Invalid tool call envelope')
-        return result
+                    interface='Anthropic Messages' if protocol=='anthropic' else 'OpenAI Chat Completions'
+                    raise ProviderError('provider_error',f'服务商返回 HTTP {r.status_code}，请检查接口是否支持 {interface} 与工具调用。')
+        return normalize(json.loads(data),protocol)
     except httpx.TimeoutException: raise ProviderError('timeout','创作 API 超时。未提交音乐生成任务，可以安全重试对话。')
     except httpx.ConnectError: raise ProviderError('connection','无法连接服务商，请检查地址和网络。')
     except httpx.HTTPError: raise ProviderError('connection','API 连接中断，请稍后重试。')
-    except (ValueError,KeyError,IndexError,TypeError): raise ProviderError('format','模型返回格式异常；需要兼容 Chat Completions 的接口。')
+    except (ValueError,KeyError,IndexError,TypeError,AttributeError): raise ProviderError('format','模型回复格式异常、为空或被截断。请检查所选协议与模型，或缩短请求后重试。')
 
 class Choice(Strict):
     label: str = Field(max_length=100)
@@ -107,7 +106,7 @@ async def chat(user,project,history,message,versions):
             if not isinstance(content,str) or not content.strip(): raise ProviderError('format','模型没有返回文字或工具建议，请重试。')
             return {'message':content[:10000],'choices':[],'trace':trace}
         if len(calls)>5: raise ProviderError('format','模型工具调用过多，请缩小修改范围。')
-        messages.append({k:v for k,v in response.items() if k in ('role','content','tool_calls')})
+        messages.append({k:v for k,v in response.items() if k in ('role','content','tool_calls','_anthropic_content')})
         for call in calls:
             try:
                 name=call['function']['name']; args=json.loads(call['function']['arguments'])

@@ -63,6 +63,8 @@ def init():
         CREATE INDEX IF NOT EXISTS project_owner ON projects(user);
         CREATE INDEX IF NOT EXISTS version_project ON versions(project);
         ''')
+        if 'protocol' not in {row['name'] for row in c.execute('PRAGMA table_info(providers)')}:
+            c.execute("ALTER TABLE providers ADD COLUMN protocol TEXT NOT NULL DEFAULT 'openai'")
     os.chmod(DATA / 'studio.sqlite3', 0o600)
 
 def password_hash(password, salt=None):

@@ -1,112 +1,82 @@
-# 余音 · YuE2 AI 音乐创作工作台
+# Yue 2.0 · Token Monster 音乐工作台
 
-面向不懂乐理的创作者：一句想法 → 比较创作方向 → 编辑歌词 → 生成歌曲 → 试听 → 修改后生成新版本。
+填写音乐风格和歌词，使用云实例上的 YuE2 生成音乐。当前是直接输入版，已移除 AI 构思、对话、修改建议和大模型 API 配置入口。
 
-本目录是基于 YuE2 的非官方中文工作台。底层算法来自 [multimodal-art-projection/YuE](https://github.com/multimodal-art-projection/YuE)，本仓库保留其源代码、历史与许可证。本项目使用 YuE2，非 YuE-v1。
+## 在镜像中启动
 
-## 在余音镜像中使用
-
-实例开机后，通过 AutoDL 的 **WebUI-6006** 入口访问。当前是免登录的私人工作空间；能够访问入口的人使用同一作品库。
+通过 AutoDL 的 WebUI-6006 入口访问。当前是免登录的私人工作空间，能够访问入口的人使用同一作品库。
 
 ```bash
 bash /root/YuE/workbench/control.sh start
 bash /root/YuE/workbench/control.sh status
+bash /root/YuE/workbench/control.sh stop
+bash /root/YuE/workbench/control.sh restart
 curl http://127.0.0.1:6006/api/health
 ```
 
-轻量镜像不捆绑权重：首次打开侧栏 **音乐模型**，点击 **下载音乐模型**，校验通过后即可生成。写词和配置助手不必等待下载。
-
-首次打开“创作助手设置”，填写自己的 OpenAI-compatible Base URL、模型名称和 API Key，再测试连接。没有 API 时仍可手动填写歌词和风格生成音乐。API 服务的费用由所选服务商决定。
-
-密钥在服务器加密保存，不在网页明文回显，不默认放入 localStorage；支持删除配置。不要将作品数据库、加密密钥或访问凭据提交到 GitHub。
-
-## 首次下载音乐模型
-
-- 固定版本：YuE2-3B `1a96eca688d6ae5d7f0feb88573fec89920fcd19`、YuE2-Vae `95535e72a97bc0f09b8ada125d26b4009428c0e8`，合计 7,794,623,684 字节，约 7.79 GB。
-- 默认 HF-Mirror，另可选择 Hugging Face 官方。当前北京云实例实测官方连接失败、镜像站可用；网络条件可能变化。
-- 显示实际写入的下载字节；区分本地检查、下载、完整性校验、暂停、失败和就绪。没有虚构剩余时间。
-- 关闭弹窗、刷新页面不取消任务；暂停或服务重启后可以继续下载。重复点击不会启动第二个下载器。
-- 校验采用官方固定版本的 SHA-256 / Git blob SHA-1，损坏文件不会进入可生成状态。下载不使用用户的创作 API Key，也不占用 GPU。
-- 模型可放在 `STUDIO_MODEL_CACHE` 指定的位置；默认 `/root/autodl-tmp/huggingface/hub`。实际需要约 7.8 GB，加至少 1 GiB 余量。若云平台独立挂载数据盘，建议放在数据盘；本实例的 autodl-tmp 位于系统盘。
-- 只有点击下载才访问模型站点，只有点击生成才执行 GPU 推理。已有匹配缓存直接复用。
-- 没有模型时 `doctor --offline` 会报告权重缺失，这是预期状态；可用 `python -m yue2.cli --help` 和工作台测试验证软件环境。
-
-此次更新在云实例通过 26 项回归测试；真实下载并校验了配置与分词文件（约 2.56 MB），通过页面下载补回缺失文件，验证了两个大权重的 HTTP 206 分段接口；原有完整权重均通过校验。没有为测试重复下载全部 7.79 GB 权重。
-
-## 创作流程
-
-1. 新建歌曲，输入“送给毕业好友，温暖、不太伤感，先做一段短歌”等想法。
-2. 点击“一起构思”，比较助手提供的方向；检查建议与差异后应用。
-3. 编辑歌名、概要、分段歌词和音乐方向。手稿自动保存，支持撤销。
-4. 点击“生成歌曲”，查看真实的排队、加载、规划、生成、合成、解码状态。
-5. 完成后播放、跳转、下载音频；波形来自真实音频。
-6. 选择“从此版继续修改”，用自然语言提出反馈，应用建议后生成新版本。
-
-普通对话不调用 GPU，只有明确的生成操作才创建任务。单卡串行执行，项目、任务和版本使用 SQLite 持久化。
-
-## 模式与边界
-
-- `full`：默认，规划旋律与和弦。
-- `melody`：旋律规划，伴奏自由生成。
-- `off`：直接依据歌词和风格生成。
-
-这些模式不代表速度或音质等级。ABC 乐谱位于高级视图，编辑后先做语法和模式校验。乐谱修改生成的是新的完整录音，不保证未编辑段的原始波形保持不变。风格提示不保证精确控制编曲。工作台没有实际试听分析能力，也未接入参考音频上传或 SheetSage2 转录。
-
-## 镜像审核和环境验证
-
-镜像中算法仓库位于 `/root/YuE`，Python 环境位于 `/root/YuE/.venv`。
-
-```bash
-cd /root/YuE
-.venv/bin/python -m yue2.cli --help
-.venv/bin/python -m yue2.cli doctor --offline
-cd workbench
-../.venv/bin/python -m unittest test_harness test_models -v
-```
-
-`doctor` 的 `dependencies_ready: true` 表示依赖就绪；其 `validated: false` 不表示完成了音质或最低显存验收。基础检查不会下载模型或触发音乐生成。
-
-已部署环境：Python 3.10、yue2-infer 0.1.6、PyTorch 2.10.0+cu130、Transformers 4.57.6；初次实测 GPU 为 RTX 4080 SUPER；2026-09-12 再次开机后分配为 RTX 5090、32607 MiB。GPU 由实例分配，镜像不绑定某张显卡。基础镜像标注的 CUDA 11.8 与实际 PyTorch 自带的 CUDA 13.0 运行时是不同信息。
-
-工作台验证基线为官方提交 `92a73cc7652fcc1f937855e4b765e0a0edd7ff2e`。此 GitHub 派生仓库创建时继承更新的官方 main；不要把仓库最新 HEAD 当作已在该镜像完整回归过的版本。已验证真实创作 API、full 模式歌曲生成、两版试听下载、刷新恢复、方案复用和取消；最初部署的 16 项回归检查通过；模型下载更新后为 26 项。新克隆环境需重新验证。
+镜像已有的开机钩子会启动服务。保存过的旧镜像不会随 GitHub 更新，需要更新实例后重新保存镜像。
 
 ## 从源码安装
 
-在全新的 Linux 环境中，将本仓库克隆到 `/root/YuE`，按照根目录官方 README 创建 `.venv` 并安装 YuE2。不要在已有部署上覆盖目录或重建环境。
+按照仓库根目录的官方说明安装 YuE2 到 `/root/YuE/.venv`，然后安装工作台依赖：
 
 ```bash
-git clone https://github.com/enter-presser/yue2-yuyin-studio.git /root/YuE
-# 按官方说明完成 .venv 和 YuE2 安装后：
 cd /root/YuE
 .venv/bin/python -m pip install -r workbench/requirements.txt
-chmod +x workbench/*.sh
 bash workbench/control.sh start
 ```
 
-`run.sh` 默认使用 `/root/autodl-tmp/huggingface` 缓存并启用离线模式。无模型时面板仍正常启动，通过“音乐模型”下载固定版本权重；下载器独立于推理离线模式。旧版含权重镜像也可升级，自动复用已有缓存。本仓库不包含权重或 API 凭据，也不会由开机脚本自动申请付费资源。
+工作台的运行脚本面向 `/root/YuE` 的镜像目录布局。其他目录部署需调整 `run.sh`、`control.sh` 中的路径。自行安装源码不会自动创建平台开机钩子。
 
-## 代码和数据
+## 自动准备模型
 
-| 文件 | 职责 |
-| --- | --- |
-| `static/` | 中文创作界面、播放器、版本切换 |
-| `server.py` | HTTP API、项目与版本、访问校验 |
-| `assistant.py` | OpenAI-compatible 适配与受约束创作工具 |
-| `domain.py` | 输入 schema、歌词、参数、ABC 校验 |
-| `models.py`、`model-catalog.json` | 固定版本、可续传下载、校验与模型就绪状态 |
-| `worker.py` | 单卡队列、四阶段推理、取消与阶段产物 |
-| `store.py` | SQLite、加密凭据、输入与任务追踪 |
-| `test_harness.py` | 隔离的回归和故障测试，不作为音乐生成演示 |
+启动后检查本地缓存，通过校验的文件直接复用。缺失时优先接入平台已挂载的 BF16 公共模型；共享文件不可用或校验不匹配时，自动从 HF-Mirror 下载固定官方版本。
 
-运行数据默认位于 `/root/autodl-tmp/yue2-studio/`：`studio.sqlite3` 存储项目和任务，`artifacts/` 存储产物，`service.log` 存储日志。`master.key` 在首次保存 API 配置时才创建。保管备份时数据库和加密密钥应配套保存。
+- YuE2-3B：`1a96eca688d6ae5d7f0feb88573fec89920fcd19`。
+- YuE2-Vae：`95535e72a97bc0f09b8ada125d26b4009428c0e8`。
+- 共约 7.79 GB，另需至少 1 GiB 空余；默认缓存 `/root/autodl-tmp/huggingface/hub`。
+- 镜像不能携带旧实例的外部模型挂载；没有共享文件的新实例会走网络下载，不需要手动执行软链接命令。
+- 页面显示实际下载字节，支持暂停、续传、手动切换下载来源和官方摘要校验。没有虚构百分比或剩余时间。
+- 下载不占用 GPU；点击生成后才加载推理模型。
+- 详细说明见 [MODEL_SETUP.md](MODEL_SETUP.md)。
+
+## 创作流程
+
+1. 新建歌曲，在手稿内填写音乐风格。
+2. 粘贴歌词，使用 `[Verse]`、`[Chorus]` 等段落标记；可点击“整理歌词段落”。
+3. 默认使用完整规划，点击“生成歌曲”。也可以先单独生成音乐方案。
+4. 下方显示排队、模型加载、音乐规划、音频生成、合成、解码和完成状态。
+5. 完成后试听、跳转、下载音频，或选择已有版本继续修改。
+
+高级设置仅保留生成方式、种子与 ABC 乐谱。已有乐谱想进一步修改，或想翻唱、尝试新的音乐风格，可以输入或粘贴到 ABC 乐谱框，再检查输入。
+
+- `full`：默认，使用旋律与和弦规划。
+- `melody`：使用旋律规划，伴奏自由发挥；输入此模式的乐谱应不带和弦符号。
+- `off`：直接根据歌词和风格生成，不能同时提供外部 ABC。
+
+作品概要、语言、情绪、人声等备注继续保存；需要影响实际生成的内容请写入音乐风格。旧版本中的笔记和参数不会因界面精简而被覆盖。
+
+修改乐谱后生成的是新的完整录音，不保证其他位置的原始波形保持不变。当前没有参考音频上传、SheetSage2 转录或听觉分析功能。这里的翻唱入口使用已有 ABC 乐谱。
+
+## 存储与验证
+
+- 项目、版本、任务、作品：`/root/autodl-tmp/yue2-studio`。
+- 日志：`/root/autodl-tmp/yue2-studio/service.log`。
+- 单卡推理队列并发为 1，普通页面操作不等待 GPU 任务。
+- 健康检查：`/api/health`。
 
 ```bash
-bash /root/YuE/workbench/control.sh stop
-bash /root/YuE/workbench/control.sh restart
+cd /root/YuE
+.venv/bin/python -m unittest discover -s workbench -p 'test_*.py' -q
+.venv/bin/python -m yue2.cli --help
 ```
 
-镜像里的 `rollback.sh` 依赖部署时的原界面备份，仅适用于保留该备份的实例；新克隆仓库不能凭空恢复旧部署。保存镜像前应清除个人配置，确认是否保留作品，并核实平台对系统盘与数据盘的保存范围。
+本次待发布代码通过 43 项测试；浏览器验证了歌词编辑、整理、保存、刷新恢复、输入校验及无歌词提交拦截。自动准备功能在云实例验证了完整缓存复用、真实配置文件下载校验，以及权重从 2 MiB 续传到 4 MiB。本轮界面精简未重新生成完整音频。
 
-## 许可证
+仓库保留未被应用加载的旧创作服务适配模块和独立测试，供已有项目兼容与维护；生产服务不再注册相关 API。
 
-保留并遵守仓库根目录的 `LICENSE`、`MODEL_LICENSE` 和 `THIRD_PARTY_NOTICES.md`。官方代码与模型权重的许可证不同；请阅读原文。本工作台不代表 YuE 官方产品或授权背书。
+## 分享镜像
+
+先停止服务，再清理本地模型缓存、私人作品和密钥。停止后不要再次启动工作台，否则会自动重新准备模型。保留代码中的 `model-assets`；其中不包含模型权重。
+
+工作台代码与算法、模型许可分别适用。官方代码许可见根目录 LICENSE，模型使用条件见各模型仓库及 `model-assets` 内保留的许可文件。

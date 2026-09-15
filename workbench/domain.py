@@ -91,6 +91,7 @@ class Rename(Strict):
     name: str = Field(min_length=1, max_length=100)
 
 class Provider(Strict):
+    protocol: Literal['openai', 'anthropic'] = 'openai'
     name: str = Field(default='我的创作助手', min_length=1, max_length=100)
     base_url: str = Field(max_length=500)
     model: str = Field(min_length=1, max_length=200)

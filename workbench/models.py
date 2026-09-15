@@ -6,6 +6,8 @@ All progress comes from verified files and bytes actually written to disk.
 import errno
 import fcntl
 import hashlib
+from contextlib import ExitStack
+from shared_models import SharedAssets, SharedModelError
 import json
 import logging
 import os
@@ -20,7 +22,7 @@ import httpx
 CATALOG = json.loads((Path(__file__).parent / 'model-catalog.json').read_text())
 SOURCES = {'official': 'https://huggingface.co', 'mirror': 'https://hf-mirror.com'}
 CACHE = Path(os.environ.get('STUDIO_MODEL_CACHE', '/root/autodl-tmp/huggingface/hub'))
-ACTIVE = {'checking', 'downloading', 'verifying', 'cancelling'}
+ACTIVE = {'checking', 'preparing', 'downloading', 'verifying', 'cancelling'}
 log = logging.getLogger('studio.models')
 
 
@@ -37,16 +39,18 @@ def atomic_json(path, value):
 
 
 class ModelManager:
-    def __init__(self, cache=CACHE, catalog=CATALOG):
+    def __init__(self, cache=CACHE, catalog=CATALOG, shared=None, shared_wait_seconds=30):
         self.cache, self.catalog = Path(cache), catalog
         self.mutex = threading.RLock()
         self.cancelled = threading.Event()
+        self.shared = shared or SharedAssets()
+        self.shared_wait_seconds = shared_wait_seconds
         self.thread = None
         self.validated = {}
         self.state = {'state': 'checking', 'ready': False, 'completed_bytes': 0,
                       'total_bytes': sum(f['size'] for m in catalog for f in m['files']),
                       'current_file': '', 'detail': '正在检查本地模型', 'error': None,
-                      'source': 'official', 'updated': time.time()}
+                      'source': 'platform', 'updated': time.time()}
         # The manifest is bundled, never supplied by API clients.
         for m in catalog:
             if not re.fullmatch(r'[\w-]+/[\w.-]+', m['repo']) or not re.fullmatch('[0-9a-f]{40}', m['revision']):
@@ -104,7 +108,7 @@ class ModelManager:
         return h.hexdigest() == f['digest']
 
     def launch(self, download=False, source='official', force=False):
-        if source not in SOURCES: raise ModelError('source', '请选择支持的下载来源。')
+        if source not in {*SOURCES, 'platform', 'auto'}: raise ModelError('source', '请选择支持的下载来源。')
         with self.mutex:
             if self.thread and self.thread.is_alive(): return {**self.snapshot(), 'duplicate': True}
             if download and self.ready(): return {**self.snapshot(), 'duplicate': True}
@@ -116,7 +120,8 @@ class ModelManager:
                 raise ModelError('download_busy', '另一个工作台进程正在检查或下载模型，请稍后重试。')
             self.cancelled.clear()
             self.update(state='checking', ready=False, current_file='', error=None,
-                        detail='正在检查本地文件，已完成的文件不会重复下载', source=source)
+                        detail='正在检查已有模型，通过校验的文件会直接复用', source=source, source_note='',
+                        shared_diagnostic=None)
             self.thread = threading.Thread(target=self.run, args=(lock, download, source, force),
                                            name='model-download', daemon=True)
             self.thread.start()
@@ -126,10 +131,34 @@ class ModelManager:
         with self.mutex:
             if self.thread and self.thread.is_alive():
                 self.cancelled.set()
-                self.update(state='cancelling', detail='正在暂停；已下载的部分会保留，可继续下载')
+                detail = '正在暂停；已完成文件会保留，未完成的转换文件会在下次重新准备。' if self.state['source'] == 'platform' else '正在暂停；已下载的部分会保留，可继续下载'
+                self.update(state='cancelling', detail=detail)
             return self.snapshot()
 
+    def select_automatic_source(self):
+        # Platform FUSE mounts may become available after the workbench process starts.
+        deadline = time.monotonic() + self.shared_wait_seconds
+        while True:
+            self.checkpoint()
+            try:
+                available = self.shared.path.is_file()
+                reason = 'shared_missing'
+            except OSError:
+                available, reason = False, 'shared_unreadable'
+            diagnostic = {'code': 'available' if available else reason,
+                          'path': str(self.shared.path), 'checked_at': time.time()}
+            self.update(shared_diagnostic=diagnostic)
+            if available: return 'platform'
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.update(source_note=f'等待共享模型后仍未能读取文件（{reason}），已自动使用 HF-Mirror 下载。')
+                log.warning('shared_probe code=%s; selecting mirror', reason)
+                return 'mirror'
+            self.update(state='checking', detail='正在等待平台共享模型就绪；可继续编辑歌词，暂未开始网络下载。')
+            self.cancelled.wait(min(0.5, remaining))
+
     def run(self, lock, download, source, force):
+        automatic = source == 'auto'
         try:
             receipt = self.cache / 'studio-model-verification.json'
             try: known = json.loads(receipt.read_text()) if not force else {}
@@ -151,7 +180,13 @@ class ModelManager:
                     self.update(completed_bytes=completed)
             self.validated = valid
             atomic_json(receipt, valid)
-            if missing and not download:
+            if automatic:
+                # A saved image does not include the previous instance's external mount.
+                # Resolve after checking the cache so a ready installation stays offline.
+                source = self.select_automatic_source() if missing else 'cache'
+                download = True
+                self.update(source=source)
+            if missing and not download and source != 'platform':
                 self.update(state='missing', ready=False, detail='需要下载音乐模型。你可以先构思和编辑歌词。')
                 return
             remaining = sum(f['size'] for _, f in missing)
@@ -159,20 +194,40 @@ class ModelManager:
             for m, f in missing:
                 _, blob = self.paths(m, f)
                 partial = blob.with_name(blob.name + '.studio-part')
-                if partial.is_file(): partial_bytes += min(partial.stat().st_size, f['size'])
+                if source != 'platform' and partial.is_file(): partial_bytes += min(partial.stat().st_size, f['size'])
             free = shutil.disk_usage(self.cache).free
             self.update(free_bytes=free)
             if missing and free < remaining - partial_bytes + 1024**3:
-                raise ModelError('disk_full', f'磁盘空间不足。请至少腾出 {(remaining-partial_bytes+1024**3)/1024**3:.1f} GiB 再继续下载。')
+                raise ModelError('disk_full', f'磁盘空间不足。请至少腾出 {(remaining-partial_bytes+1024**3)/1024**3:.1f} GiB 再准备模型。')
             # Explicitly disable ambient HF credentials; this is a public download.
-            with httpx.Client(follow_redirects=True, timeout=httpx.Timeout(30, connect=15),
-                              headers={'User-Agent': 'Yuyin-Studio/1.1', 'Accept-Encoding': 'identity'}) as client:
+            with ExitStack() as clients:
+                client = None
                 for m, f in missing:
                     self.checkpoint()
                     path, blob = self.paths(m, f)
                     blob.parent.mkdir(parents=True, exist_ok=True)
                     if not self.digest_ok(blob, f):
-                        self.fetch(client, m, f, blob, source, completed)
+                        if source == 'platform':
+                            self.update(state='preparing', detail='正在从平台共享模型准备文件，并校验官方版本', current_file=m['repo']+'/'+f['name'])
+                            try:
+                                self.shared.prepare(m, f, blob, self.checkpoint,
+                                    lambda n: self.update(completed_bytes=completed+n))
+                            except (SharedModelError, FileNotFoundError) as exc:
+                                if not automatic: raise
+                                self.checkpoint()
+                                source = 'mirror'
+                                code = exc.code if isinstance(exc, SharedModelError) else 'shared_file_missing'
+                                message = exc.message if isinstance(exc, SharedModelError) else '共享源或配套文件在读取时不存在。'
+                                log.warning('shared_prepare code=%s file=%s/%s; selecting mirror', code, m['repo'], f['name'])
+                                self.update(source=source, completed_bytes=completed,
+                                    shared_diagnostic={'code':code,'path':str(self.shared.path),'file':m['repo']+'/'+f['name'],'checked_at':time.time()},
+                                    source_note=f'共享模型准备失败（{code}）：{message} 已自动切换到 HF-Mirror 下载官方固定版本。')
+                        if source != 'platform':
+                            if client is None:
+                                client = clients.enter_context(httpx.Client(
+                                    follow_redirects=True, timeout=httpx.Timeout(30, connect=15),
+                                    headers={'User-Agent': 'Yue-Studio/1.2', 'Accept-Encoding': 'identity'}))
+                            self.fetch(client, m, f, blob, source, completed)
                     self.checkpoint()
                     path.parent.mkdir(parents=True, exist_ok=True)
                     tmp = path.with_name(path.name + '.studio-link')
@@ -185,11 +240,12 @@ class ModelManager:
                     completed += f['size']
                     self.update(completed_bytes=completed)
             self.update(state='ready', ready=True, completed_bytes=self.state['total_bytes'],
-                        current_file='', detail='音乐模型已下载并通过校验。点击生成歌曲后才会加载 GPU。', error=None)
+                        current_file='', detail='音乐模型已就绪并通过官方文件校验。点击生成歌曲后才会加载 GPU。', error=None)
         except InterruptedError:
-            self.update(state='paused', ready=False, detail='已暂停。点击继续下载，复用已完成文件并续传未完成文件。')
+            detail = '已暂停。继续准备会复用已完成文件；正在转换的单个文件会重新准备。' if source == 'platform' else '已暂停。点击继续准备，可复用已完成文件并续传。'
+            self.update(state='paused', ready=False, detail=detail)
         except Exception as exc:
-            if isinstance(exc, ModelError): code, message = exc.code, exc.message
+            if isinstance(exc, (ModelError, SharedModelError)): code, message = exc.code, exc.message
             elif isinstance(exc, httpx.TimeoutException): code, message = 'timeout', '下载连接超时。请点击继续下载，或切换下载来源后重试。'
             elif isinstance(exc, httpx.HTTPStatusError):
                 status = exc.response.status_code

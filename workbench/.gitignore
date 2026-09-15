@@ -13,3 +13,11 @@ diagnostics/
 data/
 .DS_Store
 ._*
+
+# Model download staging and private exports
+*.studio-part
+*.shared-part
+*.studio-link
+huggingface/
+yue2-studio/
+private-backup/

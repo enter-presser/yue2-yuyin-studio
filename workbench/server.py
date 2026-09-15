@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 import hashlib
 import json
@@ -15,19 +14,16 @@ from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from domain import Song, Save, Generate, Message, Revision, Rename, Provider, Login, Strict, Field, validate_song, fingerprint, sections
+from domain import Song, Save, Generate, Revision, Rename, Login, Strict, Field, validate_song, fingerprint, sections
 from store import db, init, uid, now, dump, cipher, check_password, event, artifact_dir, add_user
 import worker
 import models
-import assistant
 
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 ROOT=Path(__file__).parent
-locks={}
 attempts={}
-CHAT_TIMEOUT_SECONDS=180
 # This private image always opens the existing owner workspace.
 PRIVATE_USER=os.environ.get("STUDIO_PRIVATE_USER", "creator").strip()
 
@@ -38,13 +34,13 @@ async def lifespan(app):
         with db() as c:
             owner=c.execute("SELECT id FROM users WHERE name=?",(PRIVATE_USER,)).fetchone()
         if not owner: add_user(PRIVATE_USER,secrets.token_urlsafe(48))
-    models.manager.launch()
+    models.manager.launch(source='auto')
     worker.start()
     yield
     worker.stopping.set()
     models.manager.cancel()
 
-app=FastAPI(title='余音 · YuE2 创作工作台',lifespan=lifespan,docs_url=None,redoc_url=None)
+app=FastAPI(title='Yue 2.0 · Token Monster',lifespan=lifespan,docs_url=None,redoc_url=None)
 
 def fail(code,message,status=400): raise HTTPException(status,{'code':code,'message':message})
 
@@ -55,9 +51,6 @@ async def bad_request(request,exc):
 
 @app.exception_handler(HTTPException)
 async def http_error(request,exc): return JSONResponse({'error':exc.detail},status_code=exc.status_code)
-
-@app.exception_handler(assistant.ProviderError)
-async def api_error(request,exc): return JSONResponse({'error':{'code':exc.code,'message':exc.message}},status_code=502)
 
 def same_origin_request(request):
     # Browser Fetch Metadata describes the public page, before proxy Host rewriting.
@@ -156,12 +149,20 @@ def download_models(body:DownloadModels,u=Depends(user)):
     try: return models.manager.launch(download=True,source=body.source)
     except models.ModelError as exc: fail(exc.code,exc.message,409)
 
+@app.post('/api/models/prepare')
+def prepare_models(u=Depends(user)):
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]: fail('engine_busy','请等待当前音乐任务完成后再重新接入模型。',409)
+        try: return models.manager.launch(source='auto')
+        except models.ModelError as exc: fail(exc.code,exc.message,409)
+
 @app.post('/api/models/check')
 def check_models(u=Depends(user)):
     with db() as c:
         c.execute('BEGIN IMMEDIATE')
         if c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]: fail('engine_busy','请等待当前音乐任务完成后再检查模型。',409)
-        try: return models.manager.launch(force=True)
+        try: return models.manager.launch(force=True,source='auto')
         except models.ModelError as exc: fail(exc.code,exc.message,409)
 
 @app.post('/api/models/cancel')
@@ -195,34 +196,6 @@ def logout(request:Request):
 @app.get('/api/me')
 def me(u=Depends(user)): return {'name':'我的创作空间' if PRIVATE_USER else u['name'],'private':bool(PRIVATE_USER)}
 
-@app.get('/api/provider')
-def provider(u=Depends(user)):
-    with db() as c: row=c.execute('SELECT name,base_url,model FROM providers WHERE user=?',(u['id'],)).fetchone()
-    return {'configured':bool(row),**(dict(row) if row else {}),'storage':'服务器加密保存，密钥不返回浏览器，可删除。'}
-
-@app.put('/api/provider')
-async def set_provider(body:Provider,u=Depends(user)):
-    url=await assistant.valid_url(body.base_url)
-    with db() as c:
-        old=c.execute('SELECT * FROM providers WHERE user=?',(u['id'],)).fetchone()
-        if not body.api_key and not old: fail('key_required','首次配置请填写 API Key。')
-        secret=cipher.encrypt(body.api_key.encode()).decode() if body.api_key else old['secret']
-        # An existing credential must never be silently sent to a different origin.
-        if old and old['base_url']!=url and not body.api_key: fail('key_required','更换 API 地址时请重新输入密钥，避免将原密钥发送到其他服务商。')
-        c.execute('INSERT OR REPLACE INTO providers VALUES(?,?,?,?,?)',(u['id'],body.name,url,body.model,secret))
-    return {'configured':True}
-
-@app.delete('/api/provider')
-def delete_provider(u=Depends(user)):
-    with db() as c: c.execute('DELETE FROM providers WHERE user=?',(u['id'],))
-    return {'deleted':True}
-
-@app.post('/api/provider/test')
-async def test_provider(u=Depends(user)):
-    r=await assistant.completion(assistant.get_provider(u['id']),[{'role':'user','content':'连接测试，请只回复 OK。'}])
-    if not r.get('content'): fail('format','服务商未返回文字，请检查模型。')
-    return {'ok':True,'message':'服务商已返回有效响应。创作工具调用将在首次创作时进一步验证。'}
-
 @app.get('/api/projects')
 def projects(u=Depends(user)):
     with db() as c: rows=c.execute('SELECT id,state,revision,updated FROM projects WHERE user=? ORDER BY updated DESC',(u['id'],)).fetchall()
@@ -239,11 +212,8 @@ def project(pid:str,u=Depends(user)):
     with db() as c:
         p=own_project(c,pid,u)
         vs=c.execute('SELECT * FROM versions WHERE project=? ORDER BY created DESC',(pid,)).fetchall()
-        ms=c.execute('SELECT role,body,created FROM messages WHERE project=? ORDER BY id',(pid,)).fetchall()
-        suggestions=c.execute('SELECT * FROM suggestions WHERE project=? AND applied=0 ORDER BY created DESC LIMIT 1',(pid,)).fetchone()
     p['state']=json.loads(p['state']); p['sections']=sections(p['state']['lyrics'])
-    p['versions']=[view_version(v) for v in vs]; p['messages']=[dict(m) for m in ms]
-    p['suggestion']={**dict(suggestions),'body':json.loads(suggestions['body'])} if suggestions else None
+    p['versions']=[view_version(v) for v in vs]
     return p
 
 @app.put('/api/projects/{pid}')
@@ -267,56 +237,6 @@ def validate(pid:str,u=Depends(user)):
     with db() as c: p=own_project(c,pid,u)
     return validate_song(json.loads(p['state']))
 
-@app.post('/api/projects/{pid}/chat')
-async def chat(pid:str,body:Message,u=Depends(user)):
-    lock=locks.setdefault(u['id'],asyncio.Lock())
-    if lock.locked(): fail('busy','创作助手正在回复，请稍候。',409)
-    async with lock:
-        with db() as c:
-            p=own_project(c,pid,u); ensure_revision(p,body.revision)
-            history=c.execute('SELECT role,body FROM messages WHERE project=? ORDER BY id DESC LIMIT 8',(pid,)).fetchall()[::-1]
-            versions=[{'id':r['id'],'name':r['name'],'status':r['status']} for r in c.execute('SELECT id,name,status FROM versions WHERE project=?',(pid,))]
-        started=time.monotonic()
-        logging.info('Creative request started project=%s',pid)
-        try:
-            result=await asyncio.wait_for(assistant.chat(u['id'],p,history,body.message,versions),timeout=CHAT_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            logging.warning('Creative request timed out project=%s',pid)
-            raise assistant.ProviderError('timeout','创作助手本次等待超过 3 分钟，已停止等待。手稿未修改，也未提交音乐生成；可以重试或在设置中检查模型连接。')
-        except assistant.ProviderError as exc:
-            logging.warning('Creative request failed project=%s code=%s',pid,exc.code)
-            raise
-        logging.info('Creative request completed project=%s seconds=%.1f',pid,time.monotonic()-started)
-        sid=uid()
-        with db() as c:
-            c.execute('BEGIN IMMEDIATE'); latest=own_project(c,pid,u)
-            # A proposal is a separate artifact, never a write to the live draft.
-            # Keep completed work even if an autosave occurred during the API call.
-            outdated=latest['revision']!=body.revision
-            c.execute('INSERT INTO messages(project,role,body,created) VALUES(?,?,?,?)',(pid,'user',body.message,now()))
-            c.execute('INSERT INTO messages(project,role,body,created) VALUES(?,?,?,?)',(pid,'assistant',result['message'],now()))
-            c.execute('INSERT INTO suggestions VALUES(?,?,?,?,0,?)',(sid,pid,p['revision'],dump(result),now()))
-        return {'id':sid,'revision':p['revision'],'body':result,'outdated':outdated}
-
-class Apply(Revision):
-    choice: int = Field(ge=0,le=2)
-
-@app.post('/api/projects/{pid}/suggestions/{sid}/apply')
-def apply_suggestion(pid:str,sid:str,body:Apply,u=Depends(user)):
-    with db() as c:
-        c.execute('BEGIN IMMEDIATE'); p=own_project(c,pid,u); ensure_revision(p,body.revision)
-        s=c.execute('SELECT * FROM suggestions WHERE id=? AND project=?',(sid,pid)).fetchone()
-        if not s or s['applied']: fail('suggestion','建议已应用或不存在。',409)
-        if s['revision']!=p['revision']: fail('stale','你已编辑过项目。这条建议基于旧内容，请让助手根据最新内容重新建议。',409)
-        choices=json.loads(s['body'])['choices']
-        if body.choice>=len(choices): fail('choice','方向不存在。')
-        state=Song.model_validate(choices[body.choice]['state']).model_dump()
-        check=validate_song(state)
-        if not check['valid']: fail('input','；'.join(check['errors']))
-        result=save_state(c,p,state,p['parent'])
-        c.execute('UPDATE suggestions SET applied=1 WHERE id=?',(sid,))
-    return result
-
 @app.post('/api/projects/{pid}/generate')
 def generate(pid:str,body:Generate,u=Depends(user)):
     with db() as c:
@@ -337,7 +257,7 @@ def generate(pid:str,body:Generate,u=Depends(user)):
             source=own_version(c,body.reuse_version,u)
             if source['project']!=pid or source['fingerprint']!=fp: fail('reuse_mismatch','源音乐方案与当前输入不匹配，请重新规划。')
             if not (artifact_dir(source['id'])/'plan_manifest.json').is_file(): fail('no_plan','该版本还没有可复用的音乐方案。')
-        if not models.manager.ready(): fail('models_missing','音乐模型尚未准备好。请打开“音乐模型”，下载或检查模型后再生成；手稿已保留。',409)
+        if not models.manager.ready(): fail('models_missing','音乐模型尚未准备好。系统正在自动准备；请打开“音乐模型”查看状态，手稿已保留。',409)
         vid,jid=uid(),uid()
         number=c.execute('SELECT COUNT(*) FROM versions WHERE project=?',(pid,)).fetchone()[0]+1
         name=f"V{number} · {state['title']}"+(' · 音乐方案' if body.kind=='plan' else '')
